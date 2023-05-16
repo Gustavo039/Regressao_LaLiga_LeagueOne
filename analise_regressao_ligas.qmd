@@ -1,0 +1,429 @@
+---
+title: "Análise de Regressão - LaLiga e Ligue1"
+author: "Gustavo e Pedro"
+format: 
+  html:
+    toc: true
+    self-contained: true
+editor: visual
+---
+
+```{r}
+#| include: false
+knitr::opts_chunk$set(warning = F, message = F)
+```
+
+```{r}
+library(tidyverse)
+library(corrplot)
+library(ggcorrplot)
+```
+
+
+# Análise de regressão LaLiga
+
+Vamos, primeiramente, ler os dados ue coletamos sobre a LaLiga:
+
+```{r}
+dadosLaLiga = read_csv("dados_campeoes_LaLiga.csv")
+
+dadosLaLiga |>
+  head()
+```
+
+Vamos conferir se todas as variáveis foram lidas corretamente:
+
+```{r}
+dadosLaLiga |> 
+  glimpse()
+```
+
+## Análise variávies 
+
+Vamos analisar as variáveis que podemos utilizar a fim de explicar o aproveitamento do campeão. Dessa forma, não podemos utilizar as variáveis específicas de cada ano, como o próprio ano e o campeão, verificar as variáveis com variância 0 e retirar as variáveis que estão diretamente ligadas ao aproveitamento:
+
+```{r}
+(variancias = dadosLaLiga |>
+  select_if(is.numeric) |>
+  apply(2, var))
+```
+
+Podemos ver que as variáveis de número de times e número de partidas tem variância zero, logo não podemos utilizá-las no modelo:
+
+```{r}
+colunas_ligadas_y = c("vitorias_campeao", "empates_campeao",
+                      "derrotas_campeao", "pontos_campeao")
+colunas_var_0 = variancias[variancias == 0] |>
+  names()
+colunas_especificas = c("campeao", "ano")
+
+dados_regressao_LaLiga = dadosLaLiga |>
+  select(-!!colunas_ligadas_y, -!!colunas_especificas, -!!colunas_var_0)
+
+dados_regressao_LaLiga |>
+  glimpse()
+```
+## Análise correlações
+
+Agora, vamos realizar uma análise de correlações:
+
+```{r}
+dados_regressao_LaLiga |>
+  select_if(is.numeric) |>
+  cor() |>
+  ggcorrplot(hc.order = TRUE, type = "lower", lab = TRUE)
+```
+
+Podemos verficar, analisando as variáveis numéricas, que o aproveitamento tem uma correlação forte positiva com o saldo de gols e gols pró, porém essas duas são muito correlacionadas, logo vamos priorizar utilizar o saldo de gols que tem uma correlação maior com a variável de interesse. Vamos utilizar a variável de `gols_contra_campeao` que apresenta uma correlação negativa média.
+
+Além disso, vemos que a correlação entre total de gols e média de gols foi 1(isso ocorre pois em todos os anos tivemos a mesma quantidade de partidas).
+
+## Análise variáveis categóricas
+
+```{r}
+dados_regressao_LaLiga |>
+  select(where(is.logical), where(is.character), aproveitamento) |>
+  mutate(across(!aproveitamento, as.character)) |>
+  pivot_longer(-aproveitamento) |>
+  ggplot() +
+  aes(x = value, y = aproveitamento, fill = name) +
+  facet_wrap(~name, scales = "free") +
+  geom_boxplot() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.4, hjust = 0.5)
+  )
+```
+
+Analisando as variáveis, podemos ver que as variáveis se o ano é de Copa do Mundo ou Eurocopa, aparentemente, não tem uma relação clara. Em relação a variável se foi campeão ano anterior, temos uma diferença porém não tão clara do aproveitamento, dessa forma vamos ajustar o modelo com essa variável e verificar o resultado.
+
+Agora as variáveis de cidade e tem tem estadio próprio tem uma diferença muito grande do aproveitamento entre as classes. No entanto, temos apenas uma observação que um time sem estádio próprio foi campeão, logo vamos optar por utilizar apenas a variável de cidade.
+
+## Análise de regressão 
+
+```{r}
+dados_regressao_LaLiga |> 
+  glimpse()
+```
+Pelo que analisamos vamos ajustar um modelo de regressão linear com as variáveis `saldo_campeao`, `media_gols`, `cidade` e `campeao_ano_anterior`:
+
+```{r}
+modelo_reg_LaLiga = lm(
+  aproveitamento ~ saldo_campeao + gols_contra_campeao + cidade + campeao_ano_anterior,
+  dados_regressao_LaLiga
+  )
+```
+
+### Anova
+
+A fim de analisar as variáveis do modelo vamos realizar uma análise de variância:
+
+```{r}
+modelo_reg_LaLiga |>
+  anova()
+```
+
+Pelo teste $F$, podemos verificar que rejeitamos a hipótese nula de todos os coeficientes sejam igual a 0. Onde apenas para a variável de saldo de gols foi significativa.
+
+### Teste t
+
+```{r}
+modelo_reg_LaLiga |>
+  summary()
+```
+
+A partir do resultado do teste t vemos que, da mesma forma do teste $F$, apenas a variável de saldo de gols foi significativa, enquanto o $R^2$ foi de $84,19\%$ e o $R^2$ ajustado foi $78,27\%$. Além disso, temos que o intercepto também foi significativo.
+
+### Modelo apenas com variáveis significativas
+
+Como vimos, apenas a variável de saldo de gols foi significativa. Logo vamos ajustar um modelo apenas com essa variável.
+
+```{r}
+modelo_final_reg_LaLiga = lm(
+  aproveitamento ~ saldo_campeao,
+  dados_regressao_LaLiga
+  )
+```
+
+```{r}
+modelo_final_reg_LaLiga |>
+  summary()
+```
+
+Como podemos verificar, ajustando um modelo apenas com a variável de saldo de gols e o intercepto, temos que o $R^2$ foi de $79,91\%$ e $R^2$ ajustado foi de $78,95\%$. Interpretando os coeficiente, temos que:
+
+* A cada unidade de gol no saldo de gols representa um aumento de 0,33% no aproveitamento final
+* Quando temos um saldo de gols igual a 0, o aproveitamento do campeão estimado pelo nosso modelo é de 57,73%
+## Intervalo de confiança dos coeficientes
+
+A fim de verificar os intervalos de confiança dos coeficientes da regressão vamos utilizar a função `confint`:
+
+```{r}
+confint(modelo_final_reg_LaLiga)
+```
+
+A partir do resultados, vemos que o intervalo de 95% de confiança para o intervalo foi de (53,30; 62,16), logo este seria o intervalo para o aproveitamento quando o saldo de gol fosse 0.
+
+Além disso, temos que o intervalo de confiança de 95% para o coeficiente do saldo de gol foi de (0,26; 0,41), logo este seria o aumento do aproveitamento a cada unidade de gol a mais no saldo de gols. 
+
+
+## Intervalo de predição
+
+A fim de calcular o intervalo de predição e visualizar esse intervalo, vamos utilizar a função `predict`:
+
+```{r}
+dados_predicoes_ic = predict(
+  modelo_final_reg_LaLiga, 
+  dados_regressao_LaLiga |>
+    select(saldo_campeao),
+  interval = "confidence"
+  )
+
+dados_predicoes_ic
+```
+
+```{r}
+mPred = data.frame(Obs = dadosLaLiga$ano,
+                   Observado = dados_regressao_LaLiga$aproveitamento,
+                   Predito = dados_predicoes_ic[,1],
+                   Lower = dados_predicoes_ic[,2],
+                   Upper = dados_predicoes_ic[,3]
+                   )
+
+mPred2 = reshape2::melt(mPred, id = "Obs")
+
+ggplot(mPred2, aes(x = Obs, y = value, group = variable)) +
+  geom_point(aes(shape = variable, color = variable),
+             size = 1.5) +
+  geom_line(aes(linetype = variable, color = variable),
+            size = 0.9, alpha = 0.5) +
+  scale_color_manual(name = "", values = c("#00AFBB", "#E7B800", "black", "black")) +
+  guides(shape = "none", linetype = "none") +
+  labs(x = "Ano",
+       y = "Aproveitamento (%)",
+       title = "Modelo Linear - Aproveitamento Campeão LaLiga") +
+  theme(legend.title = element_blank(),
+        legend.position = "bottom",
+        axis.text = element_text(size = 20),
+        axis.title = element_text(size = 20),
+        panel.background = element_rect(fill = "#DCDCDC",
+                                        colour = "#DCDCDC",
+                                        size = 0.5, linetype = "solid"),
+        panel.grid.major = element_line(size = 0.9, linetype = 'solid',
+                                        colour = "white"), 
+        panel.grid.minor = element_line(size = 0.5, linetype = 'solid',
+                                        colour = "white"))
+```
+A partir do intervalo de predição, vemos que muitas vezes o valor observado está dentro do intervalo, porém ainda temos alguns pontos fora por mais que o intervalo acompanha a tendência dos valores observados. 
+
+
+# Análise de regressão Ligue1
+
+Vamos, primeiramente, ler os dados ue coletamos sobre a Ligue1:
+
+```{r}
+dadosLigue1 = read_csv("dados_campeoes_Ligue1.csv") |>
+  group_by(ano) 
+
+dadosLigue1 |>
+  head()
+```
+
+Vamos conferir se todas as variáveis foram lidas corretamente:
+
+```{r}
+dadosLigue1 |> 
+  glimpse()
+```
+
+## Análise variávies 
+
+Vamos analisar as variáveis que podemos utilizar a fim de explicar o aproveitamento do campeão. Dessa forma, não podemos utilizar as variáveis específicas de cada ano, como o próprio ano e o campeão, verificar as variáveis com variância 0 e retirar as variáveis que estão diretamente ligadas ao aproveitamento:
+
+```{r}
+(variancias = dadosLigue1 |>
+  select_if(is.numeric) |>
+  apply(2, var))
+```
+
+Podemos ver que nenhuma das variáveis tem variância zero:
+
+```{r}
+colunas_ligadas_y = c("vitorias_campeao", "empates_campeao",
+                      "derrotas_campeao", "pontos_campeao")
+
+colunas_especificas = c("campeao", "ano")
+
+dados_regressao_Ligue1 = dadosLigue1 |>
+  ungroup() |>
+  select(-!!colunas_ligadas_y, -!!colunas_especificas)
+
+dados_regressao_Ligue1 |>
+  glimpse()
+```
+## Análise correlações
+
+Agora, vamos realizar uma análise de correlações:
+
+```{r}
+dados_regressao_Ligue1 |>
+  select_if(is.numeric) |>
+  cor() |>
+  ggcorrplot(hc.order = TRUE, type = "lower", lab = TRUE)
+```
+
+Podemos verficar, analisando as variáveis numéricas, que o aproveitamento tem uma correlação forte positiva com o saldo de gols e gols pró, porém essas duas são muito correlacionadas, logo vamos priorizar utilizar o saldo de gols que tem uma correlação maior com a variável de interesse.
+
+Além disso, vemos que existe uma correlação média negativa com gols contra. Logo vamos utilizar essa variável no modelo.
+
+## Análise variáveis categóricas
+
+```{r}
+dados_regressao_Ligue1 |>
+  select(where(is.logical), where(is.character), aproveitamento) |>
+  mutate(across(!aproveitamento, as.character)) |>
+  pivot_longer(-aproveitamento) |>
+  ggplot() +
+  aes(x = value, y = aproveitamento, fill = name) +
+  facet_wrap(~name, scales = "free") +
+  geom_boxplot() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.4, hjust = 0.5)
+  )
+```
+
+Analisando as variáveis, podemos ver que as variáveis se o ano é de Copa do Mundo ou Eurocopa, aparentemente, não tem uma relação clara. Em relação a variável se foi campeão ano anterior, temos uma diferença porém não tão clara do aproveitamento, dessa forma vamos ajustar o modelo com essa variável e verificar o resultado.
+
+Em relação as variáveis de cidade e estadio próprio, vemos que sobre a cidade temos várias cidades com apenas uma observação, logo não vamos analisar essa variável. Porém em relação a variável de estadio prório, temos uma relação mais evidente.
+
+## Análise de regressão 
+
+```{r}
+dados_regressao_Ligue1 |> 
+  glimpse()
+```
+Pelo que analisamos vamos ajustar um modelo de regressão linear com as variáveis `saldo_campeao`, `gols_contra_campeao`, `estadio` e `campeao_ano_anterior`:
+
+```{r}
+modelo_reg_Ligue1 = lm(
+  aproveitamento ~ saldo_campeao+gols_contra_campeao+campeao_ano_anterior+estadio,
+  dados_regressao_Ligue1
+  )
+```
+
+### Anova
+
+A fim de analisar as variáveis do modelo vamos realizar uma análise de variância:
+
+```{r}
+modelo_reg_Ligue1 |>
+  anova()
+```
+
+Pelo teste $F$, podemos verificar que rejeitamos a hipótese nula de todos os coeficientes sejam igual a 0. Onde apenas para a variável de saldo de gols foi significativa.
+
+### Teste t
+
+```{r}
+modelo_reg_Ligue1 |>
+  summary()
+```
+
+A partir do resultado do teste t vemos que, da mesma forma do teste $F$, apenas a variável de saldo de gols foi significativa, enquanto o $R^2$ foi de $87,3\%$ e o $R^2$ ajustado foi $84,47\%$. Além disso, temos que o intercepto também foi significativo.
+
+### Modelo apenas com variáveis significativas
+
+Agora, vamos utilizar apenas as variáveis significativas:
+
+```{r}
+modelo_final_reg_Ligue1 = lm(
+  aproveitamento ~ saldo_campeao,
+  dados_regressao_Ligue1
+  )
+
+modelo_final_reg_Ligue1 |>
+  summary()
+```
+
+Como podemos verificar, agora temos todoas as variáveis significativas, onde o $R^2$ foi de $81,79\%$ e $R^2$ ajustado foi de $80,92\%$. Interpretando os coeficiente, temos que:
+
+* A cada unidade de gol no saldo de gols representa um aumento de 0,34% no aproveitamento final
+* Quando temos um saldo de gols igual a 0 e o time não tomou nenhum gol, o aproveitamento do campeão estimado pelo nosso modelo é de 57,38%
+
+## Intervalo de confiança dos coeficientes
+
+A fim de verificar os intervalos de confiança dos coeficientes da regressão vamos utilizar a função `confint`:
+
+```{r}
+confint(modelo_final_reg_Ligue1)
+```
+
+A partir do resultados, vemos que o intervalo de 95% de confiança para o intervalo foi de (53,89; 60,88), logo este seria o intervalo para o aproveitamento quando o saldo de gol fosse 0.
+
+Além disso, temos que o intervalo de confiança de 95% para o coeficiente do saldo de gol foi de (0,27; 0,41), logo este seria o aumento do aproveitamento a cada unidade de gol a mais no saldo de gols. 
+
+## Intervalo de predição
+
+A fim de calcular o intervalo de predição e visualizar esse intervalo, vamos utilizar a função `predict`:
+
+```{r}
+dados_predicoes_ic_league_one = predict(
+  modelo_final_reg_Ligue1, 
+  dados_regressao_Ligue1 |>
+    select(saldo_campeao),
+  interval = "confidence"
+  )
+
+dados_predicoes_ic_league_one
+```
+
+```{r}
+mPred = data.frame(Obs = dadosLigue1$ano,
+                   Observado = dados_regressao_Ligue1$aproveitamento,
+                   Predito = dados_predicoes_ic_league_one[,1],
+                   Lower = dados_predicoes_ic_league_one[,2],
+                   Upper = dados_predicoes_ic_league_one[,3]
+                   )
+
+mPred2 = reshape2::melt(mPred, id = "Obs")
+
+ggplot(mPred2, aes(x = Obs, y = value, group = variable)) +
+  geom_point(aes(shape = variable, color = variable),
+             size = 1.5) +
+  geom_line(aes(linetype = variable, color = variable),
+            size = 0.9, alpha = 0.5) +
+  scale_color_manual(name = "", values = c("#00AFBB", "#E7B800", "black", "black")) +
+  guides(shape = "none", linetype = "none") +
+  labs(x = "Ano",
+       y = "Aproveitamento (%)",
+       title = "Modelo Linear - Aproveitamento Campeão League One") +
+  theme(legend.title = element_blank(),
+        legend.position = "bottom",
+        axis.text = element_text(size = 20),
+        axis.title = element_text(size = 20),
+        panel.background = element_rect(fill = "#DCDCDC",
+                                        colour = "#DCDCDC",
+                                        size = 0.5, linetype = "solid"),
+        panel.grid.major = element_line(size = 0.9, linetype = 'solid',
+                                        colour = "white"), 
+        panel.grid.minor = element_line(size = 0.5, linetype = 'solid',
+                                        colour = "white"))
+```
+
+A partir do intervalo de predição, vemos que na maior parte das vezes o intervalo continha o valor observado, logo o modelo teve um bom resultado a fim de explicar o aproveitamento do campeão com base no saldo de gols e nos gols contra.
+
+# Comparação de resultados
+
+A partir dos resultados desse trabalho analisando os modelos para explicar o aproveitamento das ligas espanhola(LaLiga) e fracesa(Ligue1) tivemos que nos dois casos a principal variável significativa foi o saldo de gols, onde os intervalos de confiança foram:
+
+* LaLiga: (0,26; 0,41)
+* Ligue1: (0,26; 0,41)
+
+Ou seja, para os dois modelos os coeficientes foram muito semelhantes em relação ao saldo de gols.
+
+Além disso, tivemos um resultado, pelo $R^2$ ajustado melhor para o caso da Ligue1 onde:
+
+* $R^2$ ajustado LaLiga: $78,95\%$
+* $R^2$ ajustado Ligue1: $80,92\%$
+
+A partir das visuzalições vemos também que o modelo se ajustou melhor no caso da Ligue1, onde os valores observados estiveram, na maior parte das vezes, dentro do intervalo de predição.
+

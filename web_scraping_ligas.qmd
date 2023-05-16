@@ -1,0 +1,230 @@
+---
+title: "Web Scraping Dados - Ligas"
+author: "Gustavo e Pedro"
+format: 
+  html:
+    toc: true
+    self-contained: true
+editor: visual
+---
+
+# Coleta de dados
+
+Coletamos os dados a fim de construir os bancos de dados. Utilizando as seguintes fontes de dados:
+
+[Wikipedia](https://pt.wikipedia.org/wiki/Liga_dos_Campe%C3%B5es_da_UEFA) - dados dos países na final
+
+[Transfermarket LaLiga](https://www.transfermarkt.com/laliga/tabelle/wettbewerb/ES1?saison_id=2021) - dados do campeonato espanhol
+
+[Transfermarket LeagueOne](https://www.transfermarkt.com/ligue-1/tabelle/wettbewerb/FR1/saison_id/2021) - dados do campeonato francês
+
+# Dados Champions
+
+```{r}
+#| message: false
+library(tidyverse)
+library(rvest)
+
+champions_link = "https://pt.wikipedia.org/wiki/Liga_dos_Campe%C3%B5es_da_UEFA"
+
+finais = 47:69
+dados_finais = c()
+for(final in finais){
+  champions_final = champions_link |>
+    read_html() |>
+    html_nodes(xpath = glue::glue('/html/body/div[2]/div/div[3]/main/div[3]/div[3]/div[1]/div[24]/table/tbody/tr[2]/td/table/tbody/tr[{final}]')) |>
+    html_children()
+  
+  ano = champions_final[[1]] |>
+    html_text() |>
+    str_extract_all("[0-9]+") |>
+    {\(x) as.numeric(x[[1]][1])+1}()
+  
+  paises = champions_final[c(3,5)] |>
+    html_element("title")
+  
+  
+  pais_1 = champions_final[[3]] |>
+    html_element("a") |>
+    html_attr("title")
+  
+  pais_2 = champions_final[[5]] |>
+    html_element("a") |>
+    html_attr("title")
+  
+  dados_finais = dados_finais |>
+    rbind(
+      cbind("ano" = ano, "pais_1" = pais_1, "pais_2" = pais_2)
+    )
+}
+
+dados_finais_paises = dados_finais |>
+  as.data.frame() |>
+  mutate(
+    espanha_times_final_champions = (pais_1 == "Espanha") + (pais_2 == "Espanha"),
+    franca_times_final_champions = (pais_1 == "França") + (pais_2 == "França")
+  ) 
+
+dados_finais_paises
+```
+
+Como podemos ver temos uma tabela com os dados de todos os anos dos países dos times finalistas.
+
+
+# Dados LaLiga
+
+```{r}
+anosCopa = seq(2002, 2022, by = 4)
+anosEuroCopa = seq(2000, 2020, by = 4)
+
+cidadesLaLiga = 
+  data.frame(
+    "cidade" = c(rep("Madrid", 2), "Barcelona", "Valencia", "Coruña"),
+    "campeao" = c("Real Madrid", "Atlético Madrid", "Barcelona", "Valencia", "Dep. La Coruña"),
+    "estadio" = c(rep(T, 4), F)
+  )
+
+anos = 1998:2021
+linksLaLiga = glue::glue("https://www.transfermarkt.com/laliga/tabelle/wettbewerb/ES1?saison_id={anos}")
+
+tablesLaLiga = list()
+i = 1
+for(link in linksLaLiga){
+
+  tablesLaLiga[[i]] = link |>
+    read_html() |>
+    html_nodes(xpath = '//*[@id="yw1"]/table') |>
+    html_table() |>
+    {\(x) x[[1]][,-c(1:2)]}()
+  
+  colnames(tablesLaLiga[[i]])[2] = "Partidas"
+  
+  tablesLaLiga[[i]] = tablesLaLiga[[i]] |>
+    as_tibble() |>
+    mutate(ano = anos[i]+1)
+
+  i = i+1
+}
+
+tabelaLaLigaBD = tablesLaLiga |>
+  bind_rows() |>
+  separate("Goals", into = c("GP", "GC"),sep = ":") |>
+  mutate_at(vars(GP, GC), as.numeric) |>
+  mutate(ano = as.character(ano)) |>
+  group_by(ano) |>
+  summarize(
+    campeao = first(Club),
+    partidas_campeao = first(Partidas),
+    vitorias_campeao = first(W),
+    empates_campeao = first(D),
+    derrotas_campeao = first(L),
+    gols_pro_campeao = first(GP),
+    gols_contra_campeao = first(GC),
+    saldo_campeao = first(`+/-`),
+    pontos_campeao = first(Pts),
+    numero_times = n(),
+    total_gols = sum(GP),
+    media_gols = sum(GP)/(first(Partidas)*n()/2),
+    aproveitamento = 100*first(Pts)/(first(Partidas)*3)
+  ) |>
+  distinct_all() |>
+  inner_join(cidadesLaLiga) |>
+  ungroup() |>
+  arrange(ano) |>
+  mutate(
+    campeao_ano_anterior = campeao==lag(campeao),
+    ano_copa_do_mundo = ano %in% anosCopa,
+    ano_eurocopa = ano %in% anosEuroCopa
+  ) |>
+  filter(ano >= 2000) |>
+  inner_join(
+    dados_finais_paises |>
+      select(ano, espanha_times_final_champions)
+  )
+tabelaLaLigaBD |>
+  glimpse()
+```
+
+Podemos verificar os dados da LaLiga com todas as variáveis pedidas.
+
+```{r}
+tabelaLaLigaBD |>
+  write_csv(file = "dados_campeoes_LaLiga.csv")
+```
+
+
+# Dados LeagueOne
+
+```{r}
+cidadesLeagueOne = 
+  data.frame(
+    "cidade" = c("Paris", "Lyon", "Bordeaux", "Lille", "Nantes", 
+                 "Monaco", "Marseille", "Montpellier"),
+    "campeao" = c("Paris SG", "Olympique Lyon", "G. Bordeaux", "LOSC Lille",
+                  "FC Nantes", "Monaco", "Marseille", "Montpellier"),
+    "estadio" = c(F, T, F, F, F, F, F, F)
+  )
+
+linksLeagueOne = glue::glue("https://www.transfermarkt.com/ligue-1/tabelle/wettbewerb/FR1/saison_id/{anos}")
+
+tablesLeagueOne = list()
+i = 1
+for(link in linksLeagueOne){
+  tablesLeagueOne[[i]] = link |>
+    read_html() |>
+    html_nodes(xpath = '//*[@id="yw1"]/table') |>
+    html_table() |>
+    {\(x) x[[1]][,-c(1:2)]}()
+  
+  colnames(tablesLeagueOne[[i]])[2] = "Partidas"
+  
+  tablesLeagueOne[[i]] = tablesLeagueOne[[i]] |>
+    as_tibble() |>
+    mutate(ano = anos[i]+1)
+
+  i = i+1
+}
+
+tablesLeagueOneBD = tablesLeagueOne |>
+  bind_rows() |>
+  separate("Goals", into = c("GP", "GC"),sep = ":") |>
+  mutate_at(vars(GP, GC), as.numeric) |>
+  mutate(ano = as.character(ano)) |>
+  group_by(ano) |>
+  summarize(
+    campeao = first(Club),
+    partidas_campeao = first(Partidas),
+    vitorias_campeao = first(W),
+    empates_campeao = first(D),
+    derrotas_campeao = first(L),
+    gols_pro_campeao = first(GP),
+    gols_contra_campeao = first(GC),
+    saldo_campeao = first(`+/-`),
+    pontos_campeao = first(Pts),
+    numero_times = n(),
+    total_gols = sum(GP),
+    media_gols = sum(GP)/(first(Partidas)*n()/2),
+    aproveitamento = 100*first(Pts)/(first(Partidas)*3)
+  ) |>
+  distinct_all() |>
+  inner_join(cidadesLeagueOne) |>
+  ungroup() |>
+  arrange(ano) |>
+  mutate(
+    campeao_ano_anterior = campeao==lag(campeao),
+    ano_copa_do_mundo = ano %in% anosCopa,
+    ano_eurocopa = ano %in% anosEuroCopa
+  ) |> 
+  filter(ano >= 2000)
+
+tablesLeagueOneBD |>
+  glimpse()
+```
+
+Podemos verificar os dados da LeagueOne com todas as variáveis pedidas.
+
+```{r}
+tablesLeagueOneBD |>
+  write_csv(file = "dados_campeoes_LeagueOne.csv")
+```
+
